@@ -235,6 +235,7 @@ struct State: CustomStringConvertible {
             self.assume(cell: random, value: !assumption)
             do {
                 try self.solve(solutions: solutions)
+                return
             } catch SolvingError.noSolution {
                 // copy has a solution, ignore this branch
                 return
@@ -340,6 +341,7 @@ func main(args: [String]) {
             try s.solve(solutions: solutions)
             print("Solved: \(solutions.solutions.count) solutions")
             for s in solutions.solutions {
+                print(s.path.joined(separator: "/"))
                 print(s.description)
             }
         }
