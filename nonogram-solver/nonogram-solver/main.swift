@@ -106,6 +106,10 @@ struct SolvedRow {
     var ones: Bitmap
 }
 
+enum SolvingError: Error {
+    case noSolution
+}
+
 struct Axis {
     var size: Int { combinations.count }
     var combinations: [[Bitmap]]
@@ -127,7 +131,7 @@ struct Axis {
         return combinations.allSatisfy { $0.count == 1 }
     }
 
-    mutating func process(other: inout Axis) -> Bool {
+    mutating func process(other: inout Axis) throws -> Bool {
         var result: Bool = false
         for (i, combs) in combinations.enumerated() {
             assert(!combs.isEmpty)
@@ -139,7 +143,9 @@ struct Axis {
             filteredCombs.removeAll {
                 (s.ones & $0) != s.ones || (s.zeros & ~$0) != s.zeros
             }
-            assert(filteredCombs.count >= 1)
+            if filteredCombs.isEmpty {
+                throw SolvingError.noSolution
+            }
             combinations[i] = filteredCombs
 
             // Compute cell which are common for all the remaining combinations
@@ -176,34 +182,99 @@ struct Axis {
     }
 }
 
+class Solutions {
+    var solutions: [State] = []
+}
+
+struct Cell: Hashable {
+    var row: Int
+    var col: Int
+}
+
 struct State: CustomStringConvertible {
     var problem: Problem
     var vertical: Axis
     var horizontal: Axis
+    var path: [String]
 
     init(problem: Problem) {
         self.problem = problem
         self.vertical = Axis(groups: problem.vertical, otherSize: problem.horizontal.count)
         self.horizontal = Axis(groups: problem.horizontal, otherSize: problem.vertical.count)
+        self.path = ["root"]
     }
 
     var isSolved: Bool {
         return vertical.isSolved && horizontal.isSolved
     }
 
-    mutating func solve() {
+    mutating func solve(solutions: Solutions) throws {
+        while true {
+            try self.simplify()
+            if self.isSolved {
+                solutions.solutions.append(self)
+                return
+            }
+
+            let unsolvedCells = self.getUnsolvedCells()
+            let random = unsolvedCells.randomElement()!
+            let assumption = Bool.random()
+
+            var copy = self
+            copy.assume(cell: random, value: assumption)
+            do {
+                try copy.solve(solutions: solutions)
+            }
+            catch SolvingError.noSolution {
+                // We managed to disprove hypothesis and we learned something from that.
+                self.assume(cell: random, value: !assumption)
+                continue
+            }
+
+            // Check if have multiple solutions
+            self.assume(cell: random, value: !assumption)
+            do {
+                try self.solve(solutions: solutions)
+            } catch SolvingError.noSolution {
+                // copy has a solution, ignore this branch
+                return
+            }
+        }
+    }
+
+    mutating func simplify() throws {
         var k = 0
         while true {
-            let vProgressed = vertical.process(other: &horizontal)
-            let hProgressed = horizontal.process(other: &vertical)
+            let vProgressed = try vertical.process(other: &horizontal)
+            let hProgressed = try horizontal.process(other: &vertical)
             if !(vProgressed || hProgressed) {
                 break
             }
             k += 1
-            print("<<---  \(k)  --->>>")
+            print("After step \(path.joined(separator: "/")) [\(k)]:")
             print(self.description)
         }
-        assert(self.isSolved)
+    }
+
+    func getUnsolvedCells() -> [Cell] {
+        var result: [Cell] = []
+        for (i, row) in horizontal.solved.enumerated() {
+            for j in 0..<problem.width {
+                if row.ones[j] == row.zeros[j] {
+                    result.append(Cell(row: i, col: j))
+                }
+            }
+        }
+        return result
+    }
+
+    mutating func assume(cell: Cell, value: Bool) {
+        let key: WritableKeyPath<SolvedRow, Bitmap> = value ? \.ones : \.zeros
+        horizontal.solved[cell.row][keyPath: key][cell.col] = true
+        horizontal.dirty[cell.row] = true
+        vertical.solved[cell.col][keyPath: key][cell.row] = true
+        vertical.dirty[cell.col] = true
+        path.append("(\(cell.row),\(cell.col)) = \(value ? 1 : 0)")
     }
 
     var description: String {
@@ -265,7 +336,16 @@ func main(args: [String]) {
         do {
             let p = try Problem(path: path)
             var s = State(problem: p)
-            s.solve()
+            let solutions = Solutions()
+            try s.solve(solutions: solutions)
+            print("Solved: \(solutions.solutions.count) solutions")
+            for s in solutions.solutions {
+                print(s.description)
+            }
+        }
+        catch SolvingError.noSolution {
+            print("No solution")
+            exit(1)
         }
         catch let error {
             print(error)
